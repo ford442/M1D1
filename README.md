@@ -1,2 +1,3 @@
 # M1D1
-MIDI imlpementantion with Emscripten
+
+MIDI implementation with Emscripten.
