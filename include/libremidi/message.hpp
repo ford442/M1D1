@@ -1,32 +1,7 @@
 #pragma once
-#if defined(MSC_VER)
-#  define NOMINMAX 1
-#  define WIN32_LEAN_AND_MEAN
-#endif
-#include <algorithm>
-#include <cinttypes>
-#include <memory>
-#include <stdexcept>
-#include <vector>
+#include <libremidi/config.hpp>
 
-#if __has_include(<boost/container/small_vector.hpp>) && !defined(LIBREMIDI_NO_BOOST)
-#  include <boost/container/small_vector.hpp>
-namespace libremidi
-{
-using midi_bytes = boost::container::small_vector<unsigned char, 4>;
-}
-#else
-namespace libremidi
-{
-using midi_bytes = std::vector<unsigned char>;
-}
-#endif
-
-#if defined(LIBREMIDI_HEADER_ONLY)
-#  define LIBREMIDI_INLINE inline
-#else
-#  define LIBREMIDI_INLINE
-#endif
+#include <span>
 
 namespace libremidi
 {
@@ -86,27 +61,120 @@ enum class meta_event_type : uint8_t
   UNKNOWN = 0xFF
 };
 
-constexpr inline uint8_t clamp(uint8_t val, uint8_t min, uint8_t max)
-{
-  return std::max(std::min(val, max), min);
-}
-
 struct message
 {
   midi_bytes bytes;
-  double timestamp{};
+  int64_t timestamp{};
 
   message() noexcept = default;
-  message(const midi_bytes& src_bytes, double src_timestamp)
-      : bytes(src_bytes), timestamp(src_timestamp)
+  operator std::span<const unsigned char>() const noexcept { return {bytes.data(), bytes.size()}; }
+
+  message(const midi_bytes& src_bytes, int64_t src_timestamp) noexcept
+      : bytes(src_bytes)
+      , timestamp(src_timestamp)
   {
   }
-  message(std::initializer_list<unsigned char> args) noexcept : bytes{args}
+  message(std::initializer_list<unsigned char> args) noexcept
+      : bytes{args}
   {
   }
+
+  template <typename... Args>
+  auto assign(Args&&... args)
+  {
+    return bytes.assign(std::forward<Args>(args)...);
+  }
+  template <typename... Args>
+  auto insert(Args&&... args)
+  {
+    return bytes.insert(std::forward<Args>(args)...);
+  }
+
+  auto size() const noexcept { return bytes.size(); }
+  auto empty() const noexcept { return bytes.empty(); }
+
+  auto clear() noexcept { bytes.clear(); }
+
+  auto& operator[](int i) const noexcept { return bytes[i]; }
+  auto& operator[](int i) noexcept { return bytes[i]; }
+
+  auto& front() const { return bytes.front(); }
+  auto& back() const { return bytes.back(); }
+  auto& front() { return bytes.front(); }
+  auto& back() { return bytes.back(); }
+
+  auto begin() const noexcept { return bytes.begin(); }
+  auto end() const noexcept { return bytes.end(); }
+  auto begin() noexcept { return bytes.begin(); }
+  auto end() noexcept { return bytes.end(); }
+  auto cbegin() const noexcept { return bytes.cbegin(); }
+  auto cend() const noexcept { return bytes.cend(); }
+  auto cbegin() noexcept { return bytes.cbegin(); }
+  auto cend() noexcept { return bytes.cend(); }
+  auto rbegin() const noexcept { return bytes.rbegin(); }
+  auto rend() const noexcept { return bytes.rend(); }
+  auto rbegin() noexcept { return bytes.rbegin(); }
+  auto rend() noexcept { return bytes.rend(); }
+
+  bool uses_channel(int channel) const
+  {
+#if defined(__cpp_exceptions)
+    if (channel <= 0 || channel > 16)
+      throw std::range_error("message::uses_channel: out of range");
+#endif
+    return ((bytes[0] & 0xF) == channel - 1) && ((bytes[0] & 0xF0) != 0xF0);
+  }
+
+  int get_channel() const noexcept
+  {
+    if ((bytes[0] & 0xF0) != 0xF0)
+      return (bytes[0] & 0xF) + 1;
+    return 0;
+  }
+
+  bool is_meta_event() const noexcept { return bytes[0] == 0xFF; }
+
+  meta_event_type get_meta_event_type() const noexcept
+  {
+    if (!is_meta_event())
+      return meta_event_type::UNKNOWN;
+    return (meta_event_type)bytes[1];
+  }
+
+  message_type get_message_type() const noexcept
+  {
+    if (bytes[0] >= uint8_t(message_type::SYSTEM_EXCLUSIVE))
+    {
+      return (message_type)(bytes[0] & 0xFF);
+    }
+    else
+    {
+      return (message_type)(bytes[0] & 0xF0);
+    }
+  }
+
+  bool is_note_on_or_off() const noexcept
+  {
+    const auto status = get_message_type();
+    return (status == message_type::NOTE_ON) || (status == message_type::NOTE_OFF);
+  }
+};
+
+struct channel_events
+{
+  static constexpr uint8_t clamp_channel(int channel) noexcept
+  {
+    channel--;
+    if (channel < 0)
+      channel = 0;
+    else if (channel > 15)
+      channel = 15;
+    return channel;
+  }
+
   static uint8_t make_command(const message_type type, const int channel) noexcept
   {
-    return (uint8_t)((uint8_t)type | clamp(channel, 0, channel - 1));
+    return (uint8_t)((uint8_t)type | clamp_channel(channel));
   }
 
   static message note_on(uint8_t channel, uint8_t note, uint8_t velocity) noexcept
@@ -150,159 +218,18 @@ struct message
   {
     return {make_command(message_type::AFTERTOUCH, channel), value};
   }
-
-  bool uses_channel(int channel) const
-  {
-    if (channel <= 0 || channel > 16)
-      throw std::range_error("message::uses_channel: out of range");
-    return ((bytes[0] & 0xF) == channel - 1) && ((bytes[0] & 0xF0) != 0xF0);
-  }
-
-  int get_channel() const
-  {
-    if ((bytes[0] & 0xF0) != 0xF0)
-      return (bytes[0] & 0xF) + 1;
-    return 0;
-  }
-
-  bool is_meta_event() const
-  {
-    return bytes[0] == 0xFF;
-  }
-
-  meta_event_type get_meta_event_type() const
-  {
-    if (!is_meta_event())
-      return meta_event_type::UNKNOWN;
-    return (meta_event_type)bytes[1];
-  }
-
-  message_type get_message_type() const
-  {
-    if (bytes[0] >= uint8_t(message_type::SYSTEM_EXCLUSIVE))
-    {
-      return (message_type)(bytes[0] & 0xFF);
-    }
-    else
-    {
-      return (message_type)(bytes[0] & 0xF0);
-    }
-  }
-
-  bool is_note_on_or_off() const
-  {
-    const auto status = get_message_type();
-    return (status == message_type::NOTE_ON) || (status == message_type::NOTE_OFF);
-  }
-
-  auto size() const
-  {
-    return bytes.size();
-  }
-
-  auto& front() const
-  {
-    return bytes.front();
-  }
-  auto& back() const
-  {
-    return bytes.back();
-  }
-  auto& operator[](int i) const
-  {
-    return bytes[i];
-  }
-  auto& front()
-  {
-    return bytes.front();
-  }
-  auto& back()
-  {
-    return bytes.back();
-  }
-  auto& operator[](int i)
-  {
-    return bytes[i];
-  }
-
-  template <typename... Args>
-  auto assign(Args&&... args)
-  {
-    return bytes.assign(std::forward<Args>(args)...);
-  }
-  template <typename... Args>
-  auto insert(Args&&... args)
-  {
-    return bytes.insert(std::forward<Args>(args)...);
-  }
-  auto clear()
-  {
-    bytes.clear();
-  }
-
-  auto begin() const
-  {
-    return bytes.begin();
-  }
-  auto end() const
-  {
-    return bytes.end();
-  }
-  auto begin()
-  {
-    return bytes.begin();
-  }
-  auto end()
-  {
-    return bytes.end();
-  }
-  auto cbegin() const
-  {
-    return bytes.cbegin();
-  }
-  auto cend() const
-  {
-    return bytes.cend();
-  }
-  auto cbegin()
-  {
-    return bytes.cbegin();
-  }
-  auto cend()
-  {
-    return bytes.cend();
-  }
-  auto rbegin() const
-  {
-    return bytes.rbegin();
-  }
-  auto rend() const
-  {
-    return bytes.rend();
-  }
-  auto rbegin()
-  {
-    return bytes.rbegin();
-  }
-  auto rend()
-  {
-    return bytes.rend();
-  }
 };
 
 struct meta_events
 {
-  static message end_of_track()
+  static message end_of_track() noexcept { return {0xFF, 0x2F, 0}; }
+
+  static message channel(int channel) noexcept
   {
-    return {0xFF, 0x2F, 0};
+    return {0xff, 0x20, 0x01, (uint8_t)std::clamp(0, 0xff, channel - 1)};
   }
 
-  static message channel(int channel)
-  {
-    return {0xff, 0x20, 0x01, clamp(0, 0xff, channel - 1)};
-  }
-
-  static message tempo(int mpqn)
+  static message tempo(int mpqn) noexcept
   {
     return {0xff, 81, 3, (uint8_t)(mpqn >> 16), (uint8_t)(mpqn >> 8), (uint8_t)mpqn};
   }
@@ -325,8 +252,10 @@ struct meta_events
   // Major)
   static message key_signature(int keyIndex, bool isMinor)
   {
+#if defined(__cpp_exceptions)
     if (keyIndex < -7 || keyIndex > 7)
       throw std::range_error("meta_events::key_signature: out of range");
+#endif
     return {0xff, 0x59, 0x02, (uint8_t)keyIndex, isMinor ? (uint8_t)1 : (uint8_t)0};
   }
 

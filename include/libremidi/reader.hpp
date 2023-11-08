@@ -25,7 +25,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
-#include <libremidi/libremidi.hpp>
+#include <libremidi/message.hpp>
 
 namespace libremidi
 {
@@ -39,12 +39,14 @@ namespace libremidi
  * auto res = r.parse(midi_bytes, num_bytes);
  * ```
  */
-class reader
+class LIBREMIDI_EXPORT reader
 {
 public:
-  enum parse_result {
+  enum parse_result
+  {
     invalid,    //! Nothing could be parsed
-    incomplete, //! Some of the data could be parsed, but not all: there may be missing events / tracks
+    incomplete, //! Some of the data could be parsed, but not all: there may be missing events /
+                //! tracks
     complete,   //! All the data could be parsed but not necessarily validated
     validated   //! The data could be parsed and conforms to SMF rules
   };
@@ -57,7 +59,7 @@ public:
   parse_result parse(std::span<uint8_t> buffer) noexcept;
 #endif
 
-  double get_end_time();
+  double get_end_time() const noexcept;
 
   float ticksPerBeat{}; // precision (number of ticks distinguishable per second)
   float startingTempo{};
@@ -71,5 +73,5 @@ private:
 }
 
 #if defined(LIBREMIDI_HEADER_ONLY)
-#  include <libremidi/reader.cpp>
+  #include <libremidi/reader.cpp>
 #endif

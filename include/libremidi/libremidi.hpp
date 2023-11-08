@@ -57,468 +57,194 @@
  POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <libremidi/message.hpp>
 #include <libremidi/api.hpp>
+#include <libremidi/defaults.hpp>
+#include <libremidi/input_configuration.hpp>
+#include <libremidi/message.hpp>
+#include <libremidi/observer_configuration.hpp>
+#include <libremidi/output_configuration.hpp>
 
-#include <algorithm>
-#include <cassert>
-#include <chrono>
-#include <functional>
-#include <iostream>
-#include <memory>
+#include <any>
 #include <optional>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
-
-#if defined(__cpp_lib_span) && __cpp_lib_span >= 202002
-#define LIBREMIDI_HAS_SPAN 1
-#include <span>
-#endif
-
-#if defined(LIBREMIDI_EXPORTS)
-#  if defined(_MSC_VER)
-#    define LIBREMIDI_EXPORT __declspec(dllexport)
-#  elif defined(__GNUC__) || defined(__clang__)
-#    define LIBREMIDI_EXPORT __attribute__((visibility("default")))
-#  endif
-#else
-#  define LIBREMIDI_EXPORT
-#endif
-
-#define LIBREMIDI_VERSION "1.0.0"
 
 namespace libremidi
 {
-//! Defines various error types.
-enum midi_error
-{
-  WARNING,           /*!< A non-critical error. */
-  UNSPECIFIED,       /*!< The default, unspecified error type. */
-  NO_DEVICES_FOUND,  /*!< No devices found on system. */
-  INVALID_DEVICE,    /*!< An invalid device ID was specified. */
-  MEMORY_ERROR,      /*!< An error occured during memory allocation. */
-  INVALID_PARAMETER, /*!< An invalid parameter was specified to a function. */
-  INVALID_USE,       /*!< The function was called incorrectly. */
-  DRIVER_ERROR,      /*!< A system driver error occured. */
-  SYSTEM_ERROR,      /*!< A system error occured. */
-  THREAD_ERROR       /*!< A thread error occured. */
-};
-
-//! Base exception class for MIDI problems
-struct LIBREMIDI_EXPORT midi_exception : public std::runtime_error
-{
-  using std::runtime_error::runtime_error;
-  ~midi_exception() override;
-};
-
-struct LIBREMIDI_EXPORT no_devices_found_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::NO_DEVICES_FOUND;
-  using midi_exception::midi_exception;
-  ~no_devices_found_error() override;
-};
-struct LIBREMIDI_EXPORT invalid_device_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::INVALID_DEVICE;
-  using midi_exception::midi_exception;
-  ~invalid_device_error() override;
-};
-struct LIBREMIDI_EXPORT memory_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::MEMORY_ERROR;
-  using midi_exception::midi_exception;
-  ~memory_error() override;
-};
-struct LIBREMIDI_EXPORT invalid_parameter_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::INVALID_PARAMETER;
-  using midi_exception::midi_exception;
-  ~invalid_parameter_error() override;
-};
-struct LIBREMIDI_EXPORT invalid_use_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::INVALID_USE;
-  using midi_exception::midi_exception;
-  ~invalid_use_error() override;
-};
-struct LIBREMIDI_EXPORT driver_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::DRIVER_ERROR;
-  using midi_exception::midi_exception;
-  ~driver_error() override;
-};
-struct LIBREMIDI_EXPORT system_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::SYSTEM_ERROR;
-  using midi_exception::midi_exception;
-  ~system_error() override;
-};
-struct LIBREMIDI_EXPORT thread_error final : public midi_exception
-{
-  static constexpr auto code = midi_error::THREAD_ERROR;
-  using midi_exception::midi_exception;
-  ~thread_error() override;
-};
-
-/*! \brief Error callback function
-    \param type Type of error.
-    \param errorText Error description.
-
-    Note that class behaviour is undefined after a critical error (not
-    a warning) is reported.
- */
-using midi_error_callback = std::function<void(midi_error type, std::string_view errorText)>;
-
-//! A static function to determine the current version.
-std::string get_version() noexcept;
-
+//! Main class for observing hotplug of MIDI 1.0 and 2.0 devices.
 //! The callbacks will be called whenever a device is added or removed
 //! for a given API.
 class LIBREMIDI_EXPORT observer
 {
 public:
-  struct callbacks
-  {
-    std::function<void(int, std::string)> input_added;
-    std::function<void(int, std::string)> input_removed;
-    std::function<void(int, std::string)> output_added;
-    std::function<void(int, std::string)> output_removed;
-  };
-
-  observer(libremidi::API, callbacks);
+  //! Open an observer instance with the given configuration.
+  //!
+  //! * api_conf can be an instance of observer_configuration,
+  //!   such as jack_observer_configuration, winmm_observer_configuration, etc...
+  //! * if no callbacks are passed, no secondary thread will be created unless absolutely necessary
+  explicit observer(observer_configuration conf = {}) noexcept;
+  explicit observer(observer_configuration conf, std::any api_conf);
+  observer(const observer&) = delete;
+  observer(observer&& other) noexcept;
+  observer& operator=(const observer&) = delete;
+  observer& operator=(observer&& other) noexcept;
   ~observer();
+
+  [[nodiscard]] libremidi::API get_current_api() const noexcept;
+
+  //! Return identifiers for the available MIDI ports
+  std::vector<libremidi::input_port> get_input_ports() const noexcept;
+  std::vector<libremidi::output_port> get_output_ports() const noexcept;
 
 private:
   std::unique_ptr<class observer_api> impl_;
 };
 
-/**
- * Used to determine how large sent messages will be chunked.
- */
-struct LIBREMIDI_EXPORT chunking_parameters {
-  std::chrono::milliseconds interval{};
-  int32_t size{};
-
-  /**
-   * @brief Will be called by the chunking code to allow the API user to wait.
-   *
-   * By default just calls sleep.
-   * Arguments are: the time that must be waited, the bytes currently written.
-   * Return false if you want to abort the transfer, and true otherwise.
-   */
-  std::function<bool(std::chrono::microseconds, int)> wait = chunking_parameters::default_wait;
-
-  static bool default_wait(std::chrono::microseconds time_to_wait, int written_bytes);
-};
-
-/**********************************************************************/
-/*! \class midi_in
-    \brief A realtime MIDI input class.
-
-    This class provides a common, platform-independent API for
-    realtime MIDI input.  It allows access to a single MIDI input
-    port.  Incoming MIDI messages are either saved to a queue for
-    retrieval using the getMessage() function or immediately passed to
-    a user-specified callback function.  Create multiple instances of
-    this class to connect to more than one MIDI device at the same
-    time.  With the OS-X, Linux ALSA, and JACK MIDI APIs, it is also
-    possible to open a virtual input port to which other MIDI software
-    clients can connect.
-
-    by Gary P. Scavone, 2003-2017.
-*/
+//! Main class for receiving MIDI 1.0 and 2.0 messages.
 class LIBREMIDI_EXPORT midi_in
 {
 public:
-  //! User callback function type definition.
-  using message_callback = std::function<void(const message& message)>;
+  //! Construct a midi_in object with the default MIDI 1 back-end for the platform
+  explicit midi_in(input_configuration conf) noexcept;
 
-  //! Default constructor that allows an optional api, client name and queue
-  //! size.
-  /*!
-    An exception will be thrown if a MIDI system initialization
-    error occurs.  The queue size defines the maximum number of
-    messages that can be held in the MIDI queue (when not using a
-    callback function).  If the queue size limit is reached,
-    incoming messages will be ignored.
+  //! Construct a midi_in object with a configuration object for a specific MIDI 1 back-end
+  //! see configuration.hpp for the available configuration types.
+  //! An exception will be thrown if the requested back-end cannot be opened.
+  explicit midi_in(input_configuration conf, std::any api_conf);
 
-    If no API argument is specified and multiple API support has been
-    compiled, the default order of use is ALSA, JACK (Linux) and CORE,
-    JACK (OS-X).
+  //! Construct a midi_in object with the default MIDI 2 back-end for the platform
+  explicit midi_in(ump_input_configuration conf) noexcept;
 
-    \param api        An optional API id can be specified.
-    \param clientName An optional client name can be specified. This
-                      will be used to group the ports that are created
-                      by the application.
-    \param queueSizeLimit An optional size of the MIDI input queue can be
-    specified.
-  */
-  midi_in(
-      libremidi::API api = API::UNSPECIFIED,
-      std::string_view clientName = "libremidi input client",
-      unsigned int queueSizeLimit = 100);
+  //! Construct a midi_in object with a configuration object for a specific MIDI 2 back-end
+  //! see configuration.hpp for the available configuration types.
+  //! An exception will be thrown if the requested back-end cannot be opened.
+  explicit midi_in(ump_input_configuration conf, std::any api_conf);
 
-  //! If a MIDI connection is still open, it will be closed by the destructor.
+  midi_in(const midi_in&) = delete;
+  midi_in(midi_in&& other) noexcept;
+  midi_in& operator=(const midi_in&) = delete;
+  midi_in& operator=(midi_in&& other) noexcept;
   ~midi_in();
 
   //! Returns the MIDI API specifier for the current instance of midi_in.
-  libremidi::API get_current_api() const noexcept;
+  [[nodiscard]] libremidi::API get_current_api() const noexcept;
 
-  //! Open a MIDI input connection given by enumeration number.
-  /*!
-    \param portNumber A port number greater than 0 can be specified.
-                      Otherwise, the default or first port found is opened.
-    \param portName A name for the application port that is used to
-    connect to portId can be specified.
-  */
-  void open_port(unsigned int portNumber, std::string_view portName);
-  void open_port()
-  {
-    open_port(0, "libremidi Input");
-  }
-  void open_port(unsigned int port)
-  {
-    open_port(port, "libremidi Input");
-  }
+  //! Open a MIDI input connection
+  void open_port(const input_port& pt, std::string_view local_port_name = "libremidi input");
 
   //! Create a virtual input port, with optional name, to allow software
-  //! connections (OS X, JACK and ALSA only).
-  /*!
-    This function creates a virtual MIDI input port to which other
-    software applications can connect.  This type of functionality
-    is currently only supported by the Macintosh OS-X, any JACK,
-    and Linux ALSA APIs (the function returns an error for the other APIs).
+  //! connections.
+  //!
+  //! \param portName An optional name for the application port that is
+  //!                 used to connect to portId can be specified.
+  void open_virtual_port(std::string_view portName = "libremidi virtual port");
 
-    \param portName An optional name for the application port that is
-                    used to connect to portId can be specified.
-  */
-  void open_virtual_port(std::string_view portName);
-  void open_virtual_port()
-  {
-    open_virtual_port("libremidi virtual port");
-  }
-  //! Set a callback function to be invoked for incoming MIDI messages.
-  /*!
-    The callback function will be called whenever an incoming MIDI
-    message is received.  While not absolutely necessary, it is best
-    to set the callback function before opening a MIDI port to avoid
-    leaving some messages in the queue.
-
-    \param callback A callback function must be given.
-  */
-  void set_callback(message_callback callback);
-
-  //! Cancel use of the current callback function (if one exists).
-  /*!
-    Subsequent incoming MIDI messages will be written to the queue
-    and can be retrieved with the \e getMessage function.
-  */
-  void cancel_callback();
+  void set_port_name(std::string_view portName);
 
   //! Close an open MIDI connection (if one exists).
   void close_port();
 
-  //! Returns true if a port is open and false if not.
-  /*!
-      Note that this only applies to connections made with the openPort()
-      function, not to virtual ports.
-  */
-  bool is_port_open() const noexcept;
+  //! Returns true if a port has been opened successfully with open_port or open_virtual_port
+  [[nodiscard]] bool is_port_open() const noexcept;
 
-  //! Return the number of available MIDI input ports.
-  /*!
-    \return This function returns the number of MIDI ports of the selected API.
-  */
-  unsigned int get_port_count();
-
-  //! Return a string identifier for the specified MIDI input port number.
-  /*!
-    \return The name of the port with the given Id is returned.
-            An empty string is returned if an invalid port specifier
-            is provided. User code should assume a UTF-8 encoding.
-  */
-  std::string get_port_name(unsigned int portNumber = 0);
-
-  //! Specify whether certain MIDI message types should be queued or ignored
-  //! during input.
-  /*!
-    By default, MIDI timing and active sensing messages are ignored
-    during message input because of their relative high data rates.
-    MIDI sysex messages are ignored by default as well.  Variable
-    values of "true" imply that the respective message type will be
-    ignored.
-  */
-  void ignore_types(bool midiSysex = true, bool midiTime = true, bool midiSense = true);
-
-  //! Fill the user-provided vector with the data bytes for the next available
-  //! MIDI message in the input queue and return the event delta-time in
-  //! seconds.
-  /*!
-    This function returns immediately whether a new message is
-    available or not.  A valid message is indicated by a non-zero
-    vector size.  An exception is thrown if an error occurs during
-    message retrieval or an input connection was not previously
-    established.
-  */
-  message get_message();
-
-  bool get_message(message&);
-
-  //! Set an error callback function to be invoked when an error has occured.
-  /*!
-    The callback function will be called whenever an error has occured. It is
-    best to set the error callback function before opening a port.
-  */
-  void set_error_callback(midi_error_callback errorCallback);
-
-  void set_client_name(std::string_view clientName);
-
-  void set_port_name(std::string_view portName);
+  //! Returns true if a port is connected to another port.
+  //! Never true for virtual ports.
+  [[nodiscard]] bool is_port_connected() const noexcept;
 
 private:
-  std::unique_ptr<class midi_in_api> rtapi_;
+  std::unique_ptr<class midi_in_api> impl_;
 };
 
-/**********************************************************************/
-/*! \class midi_out
-    \brief A realtime MIDI output class.
-
-    This class provides a common, platform-independent API for MIDI
-    output.  It allows one to probe available MIDI output ports, to
-    connect to one such port, and to send MIDI bytes immediately over
-    the connection.  Create multiple instances of this class to
-    connect to more than one MIDI device at the same time.  With the
-    OS-X, Linux ALSA and JACK MIDI APIs, it is also possible to open a
-    virtual port to which other MIDI software clients can connect.
-
-    by Gary P. Scavone, 2003-2017.
-*/
-/**********************************************************************/
-
+//! Main class for sending MIDI 1.0 and 2.0 messages.
 class LIBREMIDI_EXPORT midi_out
 {
 public:
-  //! Default constructor that allows an optional client name.
-  /*!
-    An exception will be thrown if a MIDI system initialization error occurs.
+  //! Construct a midi_out object with the default back-end for the platform
+  explicit midi_out(output_configuration conf = {}) noexcept;
 
-    If no API argument is specified and multiple API support has been
-    compiled, the default order of use is ALSA, JACK (Linux) and CORE,
-    JACK (OS-X).
-  */
-  midi_out(libremidi::API api, std::string_view clientName);
+  //! Construct a midi_out object with a configuration object for a specific back-end
+  //! see configuration.hpp for the available configuration types.
+  //! An exception will be thrown if the requested back-end cannot be opened.
+  explicit midi_out(output_configuration conf, std::any api_conf);
 
-  midi_out() : midi_out{libremidi::API::UNSPECIFIED, "libremidi client"}
-  {
-  }
-
-  //! The destructor closes any open MIDI connections.
+  midi_out(const midi_out&) = delete;
+  midi_out(midi_out&& other) noexcept;
+  midi_out& operator=(const midi_out&) = delete;
+  midi_out& operator=(midi_out&& other) noexcept;
   ~midi_out();
 
   //! Returns the MIDI API specifier for the current instance of midi_out.
-  libremidi::API get_current_api() noexcept;
+  [[nodiscard]] libremidi::API get_current_api() noexcept;
 
   //! Open a MIDI output connection.
-  /*!
-      An optional port number greater than 0 can be specified.
-      Otherwise, the default or first port found is opened.  An
-      exception is thrown if an error occurs while attempting to make
-      the port connection.
-  */
-  void open_port(unsigned int portNumber, std::string_view portName);
-  void open_port()
-  {
-    open_port(0, "libremidi Output");
-  }
-  void open_port(unsigned int port)
-  {
-    open_port(port, "libremidi Output");
-  }
+  void open_port(const output_port& pt, std::string_view local_port_name = "libremidi input");
 
   //! Close an open MIDI connection (if one exists).
   void close_port();
 
-  //! Returns true if a port is open and false if not.
-  /*!
-      Note that this only applies to connections made with the openPort()
-      function, not to virtual ports.
-  */
-  bool is_port_open() const noexcept;
+  //! Returns true if a port has been opened successfully with open_port or open_virtual_port
+  [[nodiscard]] bool is_port_open() const noexcept;
+
+  //! Returns true if a port is connected to another port.
+  //! Never true for virtual ports.
+  [[nodiscard]] bool is_port_connected() const noexcept;
 
   //! Create a virtual output port, with optional name, to allow software
-  //! connections (OS X, JACK and ALSA only).
-  /*!
-      This function creates a virtual MIDI output port to which other
-      software applications can connect.  This type of functionality
-      is currently only supported by the Macintosh OS-X, Linux ALSA
-      and JACK APIs (the function does nothing with the other APIs).
-      An exception is thrown if an error occurs while attempting to
-      create the virtual port.
-  */
-  void open_virtual_port(std::string_view portName);
-  void open_virtual_port()
-  {
-    open_virtual_port("libremidi virtual port");
-  }
-
-  //! Return the number of available MIDI output ports.
-  unsigned int get_port_count();
-
-  //! Return a string identifier for the specified MIDI port type and number.
-  /*!
-    \return The name of the port with the given Id is returned.
-            An empty string is returned if an invalid port specifier
-            is provided. User code should assume a UTF-8 encoding.
-  */
-  std::string get_port_name(unsigned int portNumber = 0);
-
-  //! Immediately send a single message out an open MIDI output port.
-  /*!
-      An exception is thrown if an error occurs during output or an
-      output connection was not previously established.
-  */
-  void send_message(const std::vector<unsigned char>& message);
-
-  void send_message(const libremidi::message& message);
-
-  //! Immediately send a single message out an open MIDI output port.
-  /*!
-      An exception is thrown if an error occurs during output or an
-      output connection was not previously established.
-
-      \param message A pointer to the MIDI message as raw bytes
-      \param size    Length of the MIDI message in bytes
-  */
-  void send_message(const unsigned char* message, size_t size);
-
-  #if LIBREMIDI_HAS_SPAN
-  void send_message(std::span<unsigned char>);
-  #endif
-
-  //! Set an error callback function to be invoked when an error has occured.
-  /*!
-    The callback function will be called whenever an error has occured. It is
-    best to set the error callback function before opening a port.
-  */
-  void set_error_callback(midi_error_callback errorCallback) noexcept;
-
-  void set_client_name(std::string_view clientName);
+  //! connections.
+  //!
+  //! \param portName An optional name for the application port that is
+  //!                 used to connect to portId can be specified.
+  void open_virtual_port(std::string_view portName = "libremidi virtual port");
 
   void set_port_name(std::string_view portName);
 
-  /**
-   * For large messages, chunk their content and wait.
-   * Setting a null optional will disable chunking.
-   */
-  void set_chunking_parameters(std::optional<chunking_parameters> parameters);
+  //! Immediately send a single message out an open MIDI output port.
+  /*!
+      An exception is thrown if an error occurs during output or an
+      output connection was not previously established.
+  */
+  void send_message(const libremidi::message& message);
+
+  //! Immediately send a single message to an open MIDI output port.
+  void send_message(const unsigned char* message, size_t size);
+  void send_message(std::span<const unsigned char>);
+  void send_message(unsigned char b0);
+  void send_message(unsigned char b0, unsigned char b1);
+  void send_message(unsigned char b0, unsigned char b1, unsigned char b2);
+
+  //! Current time in the timestamp referential
+  int64_t current_time();
+
+  //! Try to schedule a message later in time if the underlying API supports it
+  //! (currently not implemented anywhere)
+  void schedule_message(int64_t timestamp, const unsigned char* message, size_t size);
+
+  //! Immediately send a single UMP packet to an open MIDI output port.
+  void send_ump(const uint32_t* message, size_t size);
+  void send_ump(const libremidi::ump&);
+  void send_ump(std::span<const uint32_t>);
+  void send_ump(uint32_t b0);
+  void send_ump(uint32_t b0, uint32_t b1);
+  void send_ump(uint32_t b0, uint32_t b1, uint32_t b2);
+  void send_ump(uint32_t b0, uint32_t b1, uint32_t b2, uint32_t b3);
+
+  //! Try to schedule an UMP packet later in time if the underlying API supports it
+  //! (currently not implemented anywhere)
+  void schedule_ump(int64_t timestamp, const uint32_t* message, size_t size);
 
 private:
-  std::unique_ptr<class midi_out_api> rtapi_;
+  std::unique_ptr<class midi_out_api> impl_;
 };
 }
 
 #if defined(LIBREMIDI_HEADER_ONLY)
-#  include <libremidi/libremidi.cpp>
+  #include <libremidi/libremidi.cpp>
+  #include <libremidi/midi_in.cpp>
+  #include <libremidi/midi_out.cpp>
+  #include <libremidi/observer.cpp>
+
+  #if defined(__EMSCRIPTEN__)
+    #include <libremidi/backends/emscripten/midi_access.cpp>
+    #include <libremidi/backends/emscripten/midi_in.cpp>
+    #include <libremidi/backends/emscripten/midi_out.cpp>
+    #include <libremidi/backends/emscripten/observer.cpp>
+  #endif
 #endif
