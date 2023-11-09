@@ -22,27 +22,27 @@ if(LIBREMIDI_HEADER_ONLY)
   target_compile_definitions(libremidi ${_public} LIBREMIDI_HEADER_ONLY)
 else()
   add_library(
-    include/shader/libremidi/detail/alsa.hpp
-    include/shader/libremidi/detail/coreaudio.hpp
-    include/shader/libremidi/detail/dummy.hpp
-    include/shader/libremidi/detail/emscripten.hpp
-    include/shader/libremidi/detail/emscripten_api.hpp
-    include/shader/libremidi/detail/jack.hpp
-    include/shader/libremidi/detail/midi_api.hpp
-    include/shader/libremidi/detail/raw_alsa.hpp
-    include/shader/libremidi/detail/raw_alsa_helpers.hpp
-    include/shader/libremidi/detail/semaphore.hpp
-    include/shader/libremidi/detail/winmm.hpp
-    include/shader/libremidi/detail/winuwp.hpp
+    include/libremidi/detail/alsa.hpp
+    include/libremidi/detail/coreaudio.hpp
+    include/libremidi/detail/dummy.hpp
+    include/libremidi/detail/emscripten.hpp
+    include/libremidi/detail/emscripten_api.hpp
+    include/libremidi/detail/jack.hpp
+    include/libremidi/detail/midi_api.hpp
+    include/libremidi/detail/raw_alsa.hpp
+    include/libremidi/detail/raw_alsa_helpers.hpp
+    include/libremidi/detail/semaphore.hpp
+    include/libremidi/detail/winmm.hpp
+    include/libremidi/detail/winuwp.hpp
 
-    include/shader/libremidi/message.hpp
-    include/shader/libremidi/reader.hpp
-    include/shader/libremidi/writer.hpp
-    include/shader/libremidi/libremidi.hpp
+    include/libremidi/message.hpp
+    include/libremidi/reader.hpp
+    include/libremidi/writer.hpp
+    include/libremidi/libremidi.hpp
 
-    include/shader/libremidi/libremidi.cpp
-    include/shader/libremidi/reader.cpp
-    include/shader/libremidi/writer.cpp
+    include/libremidi/libremidi.cpp
+    include/libremidi/reader.cpp
+    include/libremidi/writer.cpp
   )
   set(_public PUBLIC)
 endif()
