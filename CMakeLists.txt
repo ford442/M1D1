@@ -47,7 +47,7 @@ else()
   set(_public PUBLIC)
 endif()
 
-target_compile_features(libremidi ${_public} cxx_std_2a)
+set(CMAKE_CXX_STANDARD 20)
 
 find_package(Threads)
 target_link_libraries(libremidi ${_public} ${CMAKE_THREAD_LIBS_INIT})
@@ -181,7 +181,7 @@ if(LIBREMIDI_EXAMPLES)
   add_executable(midiout tests/midiout.cpp)
   target_link_libraries(midiout PRIVATE libremidi)
 
-  set(CMAKE_REQUIRED_FLAGS -std=c++2a)
+set(CMAKE_CXX_STANDARD 20)
   check_cxx_source_compiles("#include <thread>\nint main() { std::jthread t; }" HAS_STD_JTHREAD)
 
   if(HAS_STD_JTHREAD)
